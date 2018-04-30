@@ -1,0 +1,67 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+
+
+def main():
+    try:
+        args = parse_options(sys.argv)
+        create_blank(
+                args.image,
+                args.blank_path,
+                args.font_path,
+                args.font_size,
+                args.fill_text)
+    except Exception, e:
+        sys.stderr.write(str(e) + '\n')
+
+
+def create_blank(image_path, blank_path, font_path, font_size=128,
+        fill_text='No image captured'):
+    x, y = parse_dimensions(image_path)
+    make_blank = [
+        'gm', 'convert', '-size', '{}x{}'.format(x, y), 'xc:black',
+        '-font', font_path, '-pointsize', str(font_size),
+        '-fill', 'yellow',
+        '-draw', 'gravity center text 0,0 "{}"'.format(fill_text),
+        blank_path
+    ]
+    subprocess.call(make_blank)
+    return blank_path
+
+
+def parse_dimensions(img_path):
+    info = subprocess.check_output(['gm', 'identify', img_path])
+    # Example image dims: 2592x1944+0+0
+    m = re.search(r'(\d+)x(\d+)\+\d+\+\d+', info)
+    if not m:
+        raise ValueError('Failed to parse dimensions: {}'.format(img_path))
+    return map(int, m.group(1, 2))
+
+
+def parse_options(argv):
+    p = argparse.ArgumentParser(description='Generate a blank image')
+    p.add_argument('image', metavar='FILE',
+            help='Path to an image on which to base blank image dimensions')
+    p.add_argument('--blank-path', metavar='FILE', default='BLANK.jpg',
+            help='Path to which to write the blank file (default BLANK.jpg)')
+    p.add_argument('--font-path', metavar='FILE',
+            default='/System/Library/Fonts/Helvetica.dfont',
+            help='Path to a font file to use for the fill text'\
+                ' (default /System/Library/Fonts/Helvetica.dfont)')
+    p.add_argument('--font-size', metavar='PX', type=int, default=128,
+            help='Font size, in points, for the fill text'\
+                ' (default 128 points)')
+    p.add_argument('--fill-text', metavar='MSG', default='No image captured',
+            help='Fill text centered on the blank image'\
+                ' (default "No image captured")')
+    return p.parse_args()
+
+
+if __name__ == '__main__':
+    main()

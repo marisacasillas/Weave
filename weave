@@ -1,0 +1,309 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+@author: mctice
+"""
+
+from datetime import datetime, timedelta
+from glob import glob
+import argparse
+import csv
+import os
+import shutil
+import subprocess
+import sys
+
+
+CSV_NAME = 'ToWeave.csv'
+BLANK_NAME = 'BLANK.jpg'
+
+
+# TODO: Add function to write a CSV to fh listing each recording name and the
+# real-world time that it starts at.
+
+
+def main():
+    try:
+        args = parse_options(sys.argv)
+        video_specs = iter_csv(args.batch_dir)
+        for vs in video_specs:
+            v = build_video(vs, args)
+            v.weave()
+    except IOError, e:
+        sys.stderr.write(str(e) + "\n")
+
+
+def parse_options(argv):
+    p = argparse.ArgumentParser(description='Weave together timestamped'\
+            ' photos and audio into a video.')
+    p.add_argument('batch_dir', metavar='DIR',
+            help='Path to the directory containing a CSV and recording'\
+                ' subdirectories (each with photos and audio file)')
+    p.add_argument('--image-ext', metavar='EXT', default='jpg',
+            help='Extension of photo files (default jpg)')
+    p.add_argument('--audio-ext', metavar='EXT', default='MP3',
+            help='Extension of the audio files (default MP3)')
+    p.add_argument('--max-image-dur', metavar='S', type=int, default=30,
+            help='Maximum time in seconds for which an image is shown'\
+                ' (default 30)')
+    p.add_argument('--mp4', action='store_true',
+            help='Generate an mpeg4 video instead of the default mpeg2')
+    p.add_argument('--scale', metavar='W:H',
+            help='The scale in pixels, width:height, of the final video')
+    p.add_argument('--quality', metavar='N', type=int, choices=range(2,32),
+            help='The MPEG2 video quality, from 2 to 31, where 2 is the'\
+                ' best quality and 31 is the worst. Higher qualities will'\
+                ' take longer to encode (default 31)')
+    return p.parse_args()
+
+
+def iter_csv(batch_dir):
+    path = os.path.join(batch_dir, CSV_NAME)
+    fh = open(path, "rU")
+    reader = csv.DictReader(fh)
+    videos = []
+    for row in reader:
+        row['AudioTimeCheck'] = parse_time_of_day(row['AudioTimeCheck'])
+        row['PhotoTimeCheck'] = parse_time_of_day(row['PhotoTimeCheck'])
+        row['AudioTimeStart'] = parse_duration(row['AudioTimeStart'])
+        row['AudioDuration'] = parse_duration(row['AudioDuration'])
+        yield row
+
+
+def build_video(video_spec, args):
+    audio_path = os.path.join(args.batch_dir, video_spec['Recname'],
+            "{}.{}".format(video_spec['Recname'], args.audio_ext))
+    audio = build_audio(
+            audio_path, video_spec['AudioTimeStart'],
+            video_spec['AudioTimeCheck'], video_spec['AudioDuration'])
+    img_glob = '*.{}'.format(args.image_ext)
+    photos_glob = os.path.join(
+            args.batch_dir, video_spec['Recname'], 'photos', img_glob)
+    # Apparently, glob() returns paths in file system order, which is sometimes
+    # sorted and sometimes not. Let's make sure the photos are sorted
+    # lexicographically by their timestamps.
+    photo_paths = sorted(glob(photos_glob))
+    photos = build_photos(
+            photo_paths, video_spec['PhotoTimeStart'],
+            video_spec['PhotoTimeCheck'],
+            args.image_ext, args.max_image_dur)
+    return Video(
+            os.path.join(args.batch_dir, video_spec['Recname']), audio, photos,
+            os.path.join(args.batch_dir, BLANK_NAME), args.image_ext,
+            args.max_image_dur, args.mp4, args.scale, args.quality)
+
+
+def build_audio(audio_path, audio_offset, audio_key_datetime, duration):
+    rec_time = audio_key_datetime - audio_offset
+    return Audio(audio_path, rec_time, duration)
+
+
+def build_photos(photo_paths, key_photo_name, key_photo_datetime,
+        ext='jpg', max_dur=30):
+    photos = []
+    key_photo_nametime = parse_nametime(key_photo_name)
+    prev_photo = None
+    for photo_path in photo_paths:
+        photo_basename = os.path.basename(photo_path)
+        photo_name, _ = os.path.splitext(photo_basename)
+        photo_nametime = parse_nametime(photo_name)
+        photo_offset = photo_nametime - key_photo_nametime
+        photo_datetime = key_photo_datetime + photo_offset
+        photo = Photo(photo_path, photo_datetime, ext, max_dur)
+        if prev_photo is not None:
+            prev_photo.end_time = photo_datetime
+        prev_photo = photo
+        photos.append(photo)
+    return photos
+
+
+class Audio(object):
+
+    def __init__(self, path, rec_time, duration):
+        self.path = path
+        self.rec_time = rec_time
+        self.duration = duration
+
+
+class Photo(object):
+
+    def __init__(self, path, rec_time, ext='jpg', max_dur=30):
+        self.path = path
+        self.rec_time = rec_time
+        self.end_time = rec_time + timedelta(seconds=max_dur)
+        self.ext = ext
+        self.max_dur = max_dur
+
+    def __cmp__(self, other):
+        # Compare photos by their recording times (earlier recording times
+        # come first).
+        return cmp(self.rec_time, other.rec_time)
+
+    def write_frames(self, origin_time, dest_dir):
+        # Worry about end time overlapping with next start time
+        frame_start = (self.rec_time - origin_time).seconds
+        delta_s = min((self.end_time - self.rec_time).seconds, self.max_dur)
+        frame_end = frame_start + delta_s
+        rel_path = os.path.relpath(self.path, dest_dir)
+        for f in range(frame_start, frame_end):
+            dest = os.path.join(dest_dir, "f_{:06}.{}".format(f, self.ext))
+            os.symlink(rel_path, dest)
+
+
+class Video(object):
+
+    def __init__(self, vid_dir, audio, photos, blank_path, image_ext='jpg',
+            max_dur=30, encode_mp4=False, scale=None, quality=31):
+        self.vid_dir = vid_dir
+        self.frames_dir = os.path.join(self.vid_dir, "frames")
+        self.audio = audio
+        self.photos = photos
+        self.origin_time = min(audio.rec_time, photos[0].rec_time)
+        audio_end_time = audio.rec_time + audio.duration
+        photo_end_time = photos[-1].end_time
+        self.end_time = max(audio_end_time, photo_end_time)
+        self.blank_path = blank_path
+        self.image_ext = image_ext
+        self.max_dur = max_dur
+        self.encode_mp4 = encode_mp4
+        self.scale = scale
+        self.quality = quality
+
+    # "-pix_fmt yuv420p" seems to be imporant to generating a video that
+    # Quicktime will open and play. The option needs to be specified after
+    # ALL inputs. "-c:v libx264" _may_ be important; it also needs to be
+    # specied after all inputs because it's an *encoder*.
+    def weave(self):
+        shutil.rmtree(self.frames_dir, ignore_errors=True)
+        os.mkdir(self.frames_dir)
+        image_glob = os.path.join(self.frames_dir, "*.{}".format(
+                self.image_ext))
+        for photo in self.photos:
+            photo.write_frames(self.origin_time, self.frames_dir)
+        self.write_blank_frames(self.frames_dir)
+        audio_offset = (self.audio.rec_time - self.origin_time).seconds
+        if self.encode_mp4:
+            self.do_encode_mp4(image_glob, audio_offset)
+        else:
+            self.do_encode_mp2(image_glob, audio_offset)
+
+    def do_encode_mp4(self, image_glob, audio_offset):
+        mp4_path = '{}.{}'.format(self.vid_dir, 'mp4')
+        force_remove(mp4_path)
+        encode_mp4 = [
+            "ffmpeg",
+            '-hide_banner',
+            "-thread_queue_size", "1024",
+            "-framerate", "1",
+            "-pattern_type", "glob",
+            "-i", image_glob,
+            "-itsoffset", str(audio_offset),
+            "-i", self.audio.path,
+            "-pix_fmt", "yuv420p",
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            '-profile:v', 'main', 
+            '-level', '4.0',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-ac', '2',
+        ]
+        if self.quality:
+            encode_mp4 += ['-q:v', str(self.quality)]
+        if self.scale:
+            encode_mp4 += ['-vf', 'scale={}'.format(self.scale)]
+        encode_mp4.append(mp4_path)
+        print ' '.join(encode_mp4)
+        subprocess.call(encode_mp4)
+
+    def do_encode_mp2(self, image_glob, audio_offset):
+        m2v_path = '{}.{}'.format(self.vid_dir, 'm2v')
+        force_remove(m2v_path)
+        encode_m2v = [
+            "ffmpeg",
+            '-hide_banner',
+            "-thread_queue_size", "1024",
+            "-framerate", "1",
+            "-pattern_type", "glob",
+            "-i", image_glob,
+            "-pix_fmt", "yuv420p",
+            '-r', '25',
+            '-c:v', 'mpeg2video',
+#           '-f', 'vob',
+            '-q:v', '10',
+#           '-maxrate', '20000k',
+#           '-minrate', '20000k',
+#           '-bufsize', '1500k',
+#           '-packetsize', '2048',
+            '-g', '12',
+            '-bf', '2', 
+#           '-c:a', 'mp2',
+#           '-b:a', '192k',
+        ]
+        if self.quality:
+            encode_m2v += ['-q:v', str(self.quality)]
+        encode_m2v.append(m2v_path)
+        print ' '.join(encode_m2v)
+        subprocess.call(encode_m2v)
+        mpg_path = '{}.{}'.format(self.vid_dir, 'mpg')
+        force_remove(mpg_path)
+        encode_mpg = [
+            'ffmpeg',
+            '-hide_banner',
+            '-i', m2v_path,
+            "-itsoffset", str(audio_offset),
+            '-i', self.audio.path,
+            '-map', '0:0',
+            '-map', '1:0',
+            '-c:v', 'mpeg2video',
+            '-vf', 'scale=1000:750',
+            '-q:v', '2',
+            '-c:a', 'mp2',
+            '-f', 'vob',
+            mpg_path
+        ]
+        print ' '.join(encode_mpg)
+        subprocess.call(encode_mpg)
+
+    def write_blank_frames(self, frames_dir):
+        defined_frames = set(glob(os.path.join(frames_dir, "f_*")))
+        dur = (self.end_time - self.origin_time).seconds
+        all_frames = set(
+            os.path.join(frames_dir, "f_{:06}.{}".format(f, self.image_ext))
+            for f in range(1, dur))
+        missing_frames = all_frames - defined_frames
+        rel_path = os.path.relpath(self.blank_path, frames_dir)
+        for f in missing_frames:
+            os.symlink(rel_path, f)
+
+
+def force_remove(path):
+    try:
+        os.remove(path)
+    except OSError:
+        # Ignore error if file doesn't exist.
+        pass
+
+
+def parse_time_of_day(time_str):
+    # Parses an hour and minute into a datetime object.
+    return datetime.strptime(time_str, "%H:%M:%S")
+
+
+def parse_duration(dur_str):
+    # Parses hours, minutes, and seconds into a timedelta object.
+    t1 = parse_time_of_day("00:00:00")
+    t2 = datetime.strptime(dur_str, "%H:%M:%S")
+    return t2 - t1
+
+
+def parse_nametime(photo_name):
+    # Parses a photo timestamp file name into a datetime.
+    # TODO: Deal with potential "24" at the beginning, indicating that this
+    # photo rolled over midnight.
+    return datetime.strptime(photo_name, "%H%M%S")
+
+
+if __name__ == '__main__':
+    main()
