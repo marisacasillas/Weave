@@ -76,11 +76,13 @@ Download this project, open up a terminal, and change directories so that `weave
 ./weave -h
 ```
 
-You should see that you can change the expected file extension for the photos and audio file, as well as a few other defaults. You can also choose a maximum photo duration (by default, this is the picture frequency you chose for your camera; 30 seconds per photo? 10? The maximum will be the same across all the photos collected in your batch, so if you changed camera settings between recordings, run them in separate batches). Normally, a photo will display until the next photo's timestamp, but to handle missing photos, no photo will be displayed longer than the maximum duration (set to 30 seconds by default). Assuming you're fine with the defaults, however, you can start generating videos by running:
+You should see that you can change the expected file extension for the photos and audio file, as well as a few other defaults. You can also choose a maximum photo duration (by default, this is the picture frequency you chose for your camera; 15 seconds per photo? 30? The maximum will be the same across all the photos collected in your batch, so if you changed camera settings between recordings, run them in separate batches). Normally, a photo will display until the next photo's timestamp, but to handle missing photos, no photo will be displayed longer than the maximum duration (set to 15 seconds by default). Assuming you're fine with the defaults, however, you can start generating videos by running:
 
 ```
 ./weave /path/to/your/batch_directory
 ```
+
+Note that the default output format is mpeg2, but mpeg4 is also possible (see -help).
 
 Aligning the photos with the audio should happen pretty quickly (given the number of photos and length of the recording, of course), and most time will be spent running `ffmpeg` to generate a video from a sequence of second-long frames. You'll know when the video generation has started because `ffmpeg` will start printing out lots of diagnostic information; this is normal.
 

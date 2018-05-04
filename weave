@@ -44,9 +44,9 @@ def parse_options(argv):
             help='Extension of photo files (default jpg)')
     p.add_argument('--audio-ext', metavar='EXT', default='MP3',
             help='Extension of the audio files (default MP3)')
-    p.add_argument('--max-image-dur', metavar='S', type=int, default=30,
+    p.add_argument('--max-image-dur', metavar='S', type=int, default=15,
             help='Maximum time in seconds for which an image is shown'\
-                ' (default 30)')
+                ' (default 15)')
     p.add_argument('--mp4', action='store_true',
             help='Generate an mpeg4 video instead of the default mpeg2')
     p.add_argument('--scale', metavar='W:H',
@@ -100,7 +100,7 @@ def build_audio(audio_path, audio_offset, audio_key_datetime, duration):
 
 
 def build_photos(photo_paths, key_photo_name, key_photo_datetime,
-        ext='jpg', max_dur=30):
+        ext='jpg', max_dur=15):
     photos = []
     key_photo_nametime = parse_nametime(key_photo_name)
     prev_photo = None
@@ -128,7 +128,7 @@ class Audio(object):
 
 class Photo(object):
 
-    def __init__(self, path, rec_time, ext='jpg', max_dur=30):
+    def __init__(self, path, rec_time, ext='jpg', max_dur=15):
         self.path = path
         self.rec_time = rec_time
         self.end_time = rec_time + timedelta(seconds=max_dur)
@@ -154,7 +154,7 @@ class Photo(object):
 class Video(object):
 
     def __init__(self, vid_dir, audio, photos, blank_path, image_ext='jpg',
-            max_dur=30, encode_mp4=False, scale=None, quality=31):
+            max_dur=15, encode_mp4=False, scale=None, quality=31):
         self.vid_dir = vid_dir
         self.frames_dir = os.path.join(self.vid_dir, "frames")
         self.audio = audio
