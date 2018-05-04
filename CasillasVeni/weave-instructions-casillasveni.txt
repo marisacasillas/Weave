@@ -1,0 +1,1 @@
+./weave --mp4 --scale 1000:750 batchdir/

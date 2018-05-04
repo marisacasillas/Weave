@@ -1,0 +1,11 @@
+# Edit the .rb file to comment out the real mv and uncomment the puts command
+vim rename.rb
+
+# Run the re-name command, saving output to a file
+find -E png2018 -iregex '.*[0-9]{8}_[0-9]{6}.*\.(jpg|json|snap)' | ./rename.rb > renames
+
+# Edit the .rb file to uncomment the real mv and comment out the puts command
+vim rename.rb
+
+# Run the re-name command for real!!
+find -E png2018 -iregex '.*[0-9]{8}_[0-9]{6}.*\.(jpg|json|snap)' | ./rename.rb
